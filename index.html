@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Grid Dodge 2x2 - AI Debug</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap');
+
+        body {
+            background-color: #111;
+            overflow: hidden;
+            touch-action: none;
+            font-family: 'Press Start 2P', cursive;
+        }
+
+        canvas { display: block; }
+
+        .glow-text { text-shadow: 0 0 10px #0ff, 0 0 20px #0ff; }
+
+        .ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+
+        .interactive-layer { pointer-events: auto; }
+
+        /* Debug Panel Font */
+        .debug-font {
+            font-family: 'Roboto Mono', monospace;
+        }
+
+        /* Mobile Controls */
+        .d-pad {
+            display: grid;
+            grid-template-columns: 60px 60px 60px;
+            grid-template-rows: 60px 60px;
+            gap: 10px;
+            margin-bottom: 40px;
+            opacity: 0.6;
+        }
+
+        .d-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            color: white;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 24px;
+            cursor: pointer; user-select: none; transition: background 0.1s;
+        }
+        .d-btn:active { background: rgba(255, 255, 255, 0.4); }
+
+        @media (min-width: 768px) {
+            .mobile-controls { display: none !important; }
+        }
+    </style>
+</head>
+
+<body class="text-white select-none">
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="ui-layer">
+        
+        <!-- Header -->
+        <div class="w-full text-center mt-8 relative">
+            <h1 class="text-2xl text-gray-500 mb-2">GRID DODGE</h1>
+            <div id="scoreDisplay" class="text-4xl text-cyan-400 glow-text">0</div>
+            <div id="speedDisplay" class="text-xs text-yellow-500 mt-2 font-mono">SPEED: 5.0</div>
+            <div id="botStatus" class="text-xs text-purple-400 mt-1 hidden">AI ACTIVE</div>
+        </div>
+
+        <!-- AI Debug Panel (Hidden by default) -->
+        <div id="aiDebugPanel" class="hidden absolute top-0 left-0 p-4 m-2 bg-black/80 border border-purple-500/30 rounded text-[10px] leading-tight text-gray-300 debug-font w-48 z-10">
+            <div class="text-purple-400 font-bold border-b border-purple-500/30 pb-1 mb-2">AI STATE & ACTION</div>
+            <div id="aiStateContent">Waiting for inference...</div>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="startScreen" class="absolute inset-0 flex flex-col items-center justify-center bg-black/80 interactive-layer z-50">
+            <h1 class="text-4xl text-yellow-400 mb-8 text-center leading-relaxed">READY?</h1>
+            <p class="text-gray-400 mb-8 text-xs text-center px-4">USE ARROW KEYS OR BUTTONS TO MOVE.<br>AVOID THE RED SPIKES.</p>
+
+            <div class="flex gap-4">
+                <button id="startBtn" class="px-8 py-4 bg-cyan-600 hover:bg-cyan-500 text-white rounded shadow-[0_0_15px_rgba(8,145,178,0.7)] transition-all">PLAY</button>
+                <button id="botBtn" disabled class="px-8 py-4 bg-purple-800 text-gray-400 rounded transition-all cursor-not-allowed border border-purple-600">LOADING AI...</button>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameOverScreen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-red-900/90 interactive-layer z-50">
+            <h1 class="text-4xl text-white mb-4">GAME OVER</h1>
+            <p class="text-xl mb-8">SCORE: <span id="finalScore">0</span></p>
+            <button id="restartBtn" class="px-8 py-4 bg-white text-red-900 hover:bg-gray-200 rounded shadow-[0_0_15px_rgba(255,255,255,0.7)] transition-all">TRY AGAIN</button>
+        </div>
+
+        <!-- Mobile Controls -->
+        <div class="mobile-controls w-full flex justify-center pb-8 interactive-layer">
+            <div class="d-pad">
+                <div></div> <div class="d-btn" id="btnUp">▲</div> <div></div>
+                <div class="d-btn" id="btnLeft">◀</div> <div class="d-btn" id="btnDown">▼</div> <div class="d-btn" id="btnRight">▶</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const speedDisplay = document.getElementById('speedDisplay');
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const finalScoreDisplay = document.getElementById('finalScore');
+        const startBtn = document.getElementById('startBtn');
+        const botBtn = document.getElementById('botBtn');
+        const restartBtn = document.getElementById('restartBtn');
+        const botStatus = document.getElementById('botStatus');
+        
+        // Debug Elements
+        const aiDebugPanel = document.getElementById('aiDebugPanel');
+        const aiStateContent = document.getElementById('aiStateContent');
+
+        // Game State
+        let gameRunning = false;
+        let isBotPlaying = false;
+        let animationId;
+        let lastTime = 0;
+        let score = 0;
+        let spawnTimer = 0;
+        let spawnInterval = 1000;
+
+        // AI Session
+        let botSession = null;
+        let botThinking = false;
+
+        // Grid Configuration
+        const GRID_SIZE = 2;
+        let CELL_SIZE = 100;
+        let GRID_OFFSET_X = 0;
+        let GRID_OFFSET_Y = 0;
+
+        const player = { gridX: 0, gridY: 0, color: '#00ffff' };
+        let hazards = [];
+
+        // --- AI INITIALIZATION ---
+        async function initBot() {
+            try {
+                // IMPORTANT: Ensure 'grid_dodge.onnx' exists in the same directory or provide correct path
+                botSession = await ort.InferenceSession.create('./grid_dodge.onnx');
+                console.log("Bot Model Loaded");
+                botBtn.innerText = "WATCH BOT";
+                botBtn.disabled = false;
+                botBtn.classList.remove('bg-purple-800', 'text-gray-400', 'cursor-not-allowed');
+                botBtn.classList.add('bg-purple-600', 'hover:bg-purple-500', 'text-white', 'shadow-[0_0_15px_rgba(147,51,234,0.7)]');
+            } catch (e) {
+                console.error("Could not load grid_dodge.onnx", e);
+                botBtn.innerText = "AI ERROR";
+                aiStateContent.innerHTML = "<span class='text-red-500'>Model not found.</span>";
+            }
+        }
+        initBot();
+
+        // --- RESIZE ---
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            const minDim = Math.min(canvas.width, canvas.height);
+            CELL_SIZE = Math.floor(minDim * 0.15);
+            if (CELL_SIZE < 60) CELL_SIZE = 60;
+            GRID_OFFSET_X = canvas.width / 2 - CELL_SIZE;
+            GRID_OFFSET_Y = canvas.height / 2 - CELL_SIZE;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- MOVEMENT ---
+        function movePlayer(dx, dy) {
+            if (!gameRunning) return;
+            const newX = player.gridX + dx;
+            const newY = player.gridY + dy;
+            if (newX >= 0 && newX < GRID_SIZE) player.gridX = newX;
+            if (newY >= 0 && newY < GRID_SIZE) player.gridY = newY;
+        }
+
+        // --- INPUTS ---
+        document.addEventListener('keydown', (e) => {
+            if(isBotPlaying) return;
+            switch(e.key) {
+                case 'ArrowUp': case 'w': case 'W': movePlayer(0, -1); break;
+                case 'ArrowDown': case 's': case 'S': movePlayer(0, 1); break;
+                case 'ArrowLeft': case 'a': case 'A': movePlayer(-1, 0); break;
+                case 'ArrowRight': case 'd': case 'D': movePlayer(1, 0); break;
+                case ' ': if (!gameRunning) startGame(false); break;
+            }
+        });
+
+        const bindTouch = (id, dx, dy) => {
+            const el = document.getElementById(id);
+            el.addEventListener('touchstart', (e) => { e.preventDefault(); if(!isBotPlaying) movePlayer(dx, dy); });
+            el.addEventListener('mousedown', (e) => { e.preventDefault(); if(!isBotPlaying) movePlayer(dx, dy); });
+        };
+        bindTouch('btnUp', 0, -1);
+        bindTouch('btnDown', 0, 1);
+        bindTouch('btnLeft', -1, 0);
+        bindTouch('btnRight', 1, 0);
+
+        // --- HELPER: CALCULATE CURRENT SPEED ---
+        function getGameSpeed() {
+            return 5 * (1 + (score / 30) * 0.2);
+        }
+
+        function updateSpeedDisplay() {
+            const spd = getGameSpeed();
+            speedDisplay.innerText = "SPEED: " + spd.toFixed(1);
+        }
+
+        // --- GAME LOGIC ---
+        function startGame(botMode = false) {
+            gameRunning = true;
+            isBotPlaying = botMode;
+            score = 0;
+            scoreDisplay.innerText = score;
+            updateSpeedDisplay();
+
+            hazards = [];
+            player.gridX = 0;
+            player.gridY = 0;
+            spawnInterval = 1200;
+
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+
+            if(isBotPlaying) {
+                botStatus.classList.remove('hidden');
+                aiDebugPanel.classList.remove('hidden'); // Show debug panel
+                player.color = '#bf00ff';
+            } else {
+                botStatus.classList.add('hidden');
+                aiDebugPanel.classList.add('hidden');
+                player.color = '#00ffff';
+            }
+
+            lastTime = performance.now();
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            cancelAnimationFrame(animationId);
+            finalScoreDisplay.innerText = score;
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function spawnHazard() {
+            let usedDirection = -1;
+            for (let i = 0; i < 2; i++) {
+                const targetX = Math.floor(Math.random() * GRID_SIZE);
+                const targetY = Math.floor(Math.random() * GRID_SIZE);
+                let direction;
+                do { direction = Math.floor(Math.random() * 4); } while (direction === usedDirection);
+                usedDirection = direction;
+
+                let startX, startY;
+                const baseSpeed = getGameSpeed();
+                const variance = 0.8 + (Math.random() * 0.4);
+                const speed = baseSpeed * variance;
+
+                const targetCenterX = GRID_OFFSET_X + targetX * CELL_SIZE + CELL_SIZE / 2;
+                const targetCenterY = GRID_OFFSET_Y + targetY * CELL_SIZE + CELL_SIZE / 2;
+
+                if (direction === 0) { startX = targetCenterX; startY = -50; }
+                else if (direction === 1) { startX = canvas.width + 50; startY = targetCenterY; }
+                else if (direction === 2) { startX = targetCenterX; startY = canvas.height + 50; }
+                else { startX = -50; startY = targetCenterY; }
+
+                const angle = Math.atan2(targetCenterY - startY, targetCenterX - startX);
+                const vx = Math.cos(angle) * speed;
+                const vy = Math.sin(angle) * speed;
+
+                hazards.push({
+                    x: startX, y: startY, vx: vx, vy: vy,
+                    targetX: targetX, targetY: targetY,
+                    active: true, passed: false
+                });
+            }
+        }
+
+        // --- AI LOGIC & VISUALIZATION ---
+        async function runBotInference() {
+            if (!botSession || botThinking || !gameRunning) return;
+            botThinking = true;
+
+            const inputData = new Float32Array(10);
+            inputData[0] = player.gridX;
+            inputData[1] = player.gridY;
+
+            const pCenterX = GRID_OFFSET_X + player.gridX * CELL_SIZE + CELL_SIZE / 2;
+            const pCenterY = GRID_OFFSET_Y + player.gridY * CELL_SIZE + CELL_SIZE / 2;
+
+            // Sort hazards by distance to player for consistent input
+            const sorted = [...hazards].sort((a, b) => {
+                const distA = Math.hypot(a.x - pCenterX, a.y - pCenterY);
+                const distB = Math.hypot(b.x - pCenterX, b.y - pCenterY);
+                return distA - distB;
+            });
+
+            // Fill input tensor
+            for(let i=0; i<2; i++) {
+                const offset = 2 + (i * 4);
+                if(i < sorted.length) {
+                    const h = sorted[i];
+                    inputData[offset]     = (h.x - pCenterX) / CELL_SIZE; // Rel X
+                    inputData[offset + 1] = (h.y - pCenterY) / CELL_SIZE; // Rel Y
+                    inputData[offset + 2] = (h.vx / CELL_SIZE) * 10;      // Vel X
+                    inputData[offset + 3] = (h.vy / CELL_SIZE) * 10;      // Vel Y
+                } else {
+                    inputData[offset] = 0; inputData[offset+1] = 0;
+                    inputData[offset+2] = 0; inputData[offset+3] = 0;
+                }
+            }
+
+            try {
+                const tensor = new ort.Tensor('float32', inputData, [1, 10]);
+                const results = await botSession.run({ input: tensor });
+                const output = results.output.data;
+
+                // Decision
+                let maxVal = -Infinity;
+                let action = 4;
+                for(let i=0; i<5; i++) {
+                    if(output[i] > maxVal) { maxVal = output[i]; action = i; }
+                }
+
+                // Execute Move
+                if(action === 0) movePlayer(0, -1);
+                else if(action === 1) movePlayer(1, 0);
+                else if(action === 2) movePlayer(0, 1);
+                else if(action === 3) movePlayer(-1, 0);
+
+                // --- UPDATE DEBUG DISPLAY ---
+                const actionNames = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'STAY'];
+                const selectedAction = actionNames[action];
+
+                // Format State Data
+                let html = `<div class="mb-2"><span class="text-white">INPUT STATE:</span></div>`;
+                html += `<div><span class="text-blue-400">P_Grid:</span> [${inputData[0]}, ${inputData[1]}]</div>`;
+                
+                // Hazard 1
+                html += `<div class="mt-1 text-gray-500">Hazard 1 (Nearest)</div>`;
+                if (sorted.length > 0) {
+                    html += `<div>dPos: <span class="text-red-300">[${inputData[2].toFixed(2)}, ${inputData[3].toFixed(2)}]</span></div>`;
+                    html += `<div>Vel : [${inputData[4].toFixed(2)}, ${inputData[5].toFixed(2)}]</div>`;
+                } else {
+                    html += `<div class="text-gray-600">-- None --</div>`;
+                }
+
+                // Hazard 2
+                html += `<div class="mt-1 text-gray-500">Hazard 2</div>`;
+                if (sorted.length > 1) {
+                    html += `<div>dPos: <span class="text-red-300">[${inputData[6].toFixed(2)}, ${inputData[7].toFixed(2)}]</span></div>`;
+                    html += `<div>Vel : [${inputData[8].toFixed(2)}, ${inputData[9].toFixed(2)}]</div>`;
+                } else {
+                    html += `<div class="text-gray-600">-- None --</div>`;
+                }
+
+                // Format Action Data
+                html += `<div class="mt-3 mb-1 border-t border-purple-500/30 pt-1"><span class="text-white">ACTION: <span class="text-yellow-400">${selectedAction}</span></span></div>`;
+                
+                // Probabilities
+                for(let i=0; i<5; i++) {
+                    const prob = (output[i] * 100).toFixed(1);
+                    const isSelected = i === action;
+                    const style = isSelected ? 'text-green-400 font-bold' : 'text-gray-500';
+                    const marker = isSelected ? '>' : '&nbsp;';
+                    html += `<div class="${style} flex justify-between"><span>${marker} ${actionNames[i]}</span> <span>${prob}%</span></div>`;
+                }
+
+                aiStateContent.innerHTML = html;
+
+            } catch(e) {
+                console.error("Inference failed", e);
+                aiStateContent.innerHTML = `<span class="text-red-500">Inference Error: ${e.message}</span>`;
+            }
+
+            botThinking = false;
+        }
+
+        function update(deltaTime) {
+            spawnTimer += deltaTime;
+            const waveCleared = hazards.length === 0 || hazards.every(h => h.passed);
+
+            if (waveCleared && spawnTimer > 200) {
+                spawnHazard();
+                spawnTimer = 0;
+            }
+
+            if(isBotPlaying) {
+                runBotInference();
+            }
+
+            for (let i = hazards.length - 1; i >= 0; i--) {
+                const h = hazards[i];
+                h.x += h.vx * (deltaTime / 16);
+                h.y += h.vy * (deltaTime / 16);
+
+                if (h.x < -100 || h.x > canvas.width + 100 || h.y < -100 || h.y > canvas.height + 100) {
+                    hazards.splice(i, 1);
+                    continue;
+                }
+
+                const pCenterX = GRID_OFFSET_X + player.gridX * CELL_SIZE + CELL_SIZE / 2;
+                const pCenterY = GRID_OFFSET_Y + player.gridY * CELL_SIZE + CELL_SIZE / 2;
+                const dist = Math.hypot(h.x - pCenterX, h.y - pCenterY);
+
+                if (dist < 30) gameOver();
+
+                const distToTarget = Math.hypot(h.x - (GRID_OFFSET_X + h.targetX * CELL_SIZE + CELL_SIZE/2), h.y - (GRID_OFFSET_Y + h.targetY * CELL_SIZE + CELL_SIZE/2));
+                const currentSpeed = Math.hypot(h.vx, h.vy);
+                const detectionRadius = currentSpeed + 20;
+
+                if (!h.passed && distToTarget < detectionRadius) {
+                    h.passed = true;
+                    score++;
+                    scoreDisplay.innerText = score;
+                    updateSpeedDisplay();
+                }
+            }
+        }
+
+        function draw() {
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.strokeRect(GRID_OFFSET_X, GRID_OFFSET_Y, CELL_SIZE * 2, CELL_SIZE * 2);
+            ctx.moveTo(GRID_OFFSET_X + CELL_SIZE, GRID_OFFSET_Y);
+            ctx.lineTo(GRID_OFFSET_X + CELL_SIZE, GRID_OFFSET_Y + CELL_SIZE * 2);
+            ctx.moveTo(GRID_OFFSET_X, GRID_OFFSET_Y + CELL_SIZE);
+            ctx.lineTo(GRID_OFFSET_X + CELL_SIZE * 2, GRID_OFFSET_Y + CELL_SIZE);
+            ctx.stroke();
+
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#0ff';
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.3)';
+            ctx.strokeRect(GRID_OFFSET_X, GRID_OFFSET_Y, CELL_SIZE * 2, CELL_SIZE * 2);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = 'rgba(0, 255, 255, 0.1)';
+            ctx.fillRect(GRID_OFFSET_X + player.gridX * CELL_SIZE, GRID_OFFSET_Y + player.gridY * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+
+            hazards.forEach(h => {
+                ctx.save();
+                ctx.translate(h.x, h.y);
+                const angle = Math.atan2(h.vy, h.vx);
+                ctx.rotate(angle);
+                ctx.fillStyle = '#ff3333';
+                ctx.shadowColor = '#ff0000';
+                ctx.shadowBlur = 15;
+                ctx.beginPath();
+                ctx.moveTo(15, 0);
+                ctx.lineTo(-10, 10);
+                ctx.lineTo(-10, -10);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            });
+
+            const px = GRID_OFFSET_X + player.gridX * CELL_SIZE + CELL_SIZE / 2;
+            const py = GRID_OFFSET_Y + player.gridY * CELL_SIZE + CELL_SIZE / 2;
+
+            ctx.fillStyle = player.color;
+            ctx.shadowColor = player.color;
+            ctx.shadowBlur = 20;
+            ctx.beginPath();
+            ctx.arc(px, py, 15, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#fff';
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.arc(px, py, 8, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function gameLoop(timestamp) {
+            if (!gameRunning) return;
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+            update(deltaTime);
+            draw();
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        startBtn.addEventListener('click', () => startGame(false));
+        botBtn.addEventListener('click', () => startGame(true));
+        restartBtn.addEventListener('click', () => {
+            startGame(isBotPlaying);
+        });
+
+        draw();
+    </script>
+</body>
+</html>
