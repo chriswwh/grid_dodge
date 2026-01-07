@@ -207,7 +207,7 @@ def train():
     replay_buffer = deque(maxlen=10000)
 
     epsilon = 1.0
-    epsilon_decay = 0.995
+    epsilon_decay = 0.9995
     epsilon_min = 0.05
     batch_size = 64
     gamma = 0.99
