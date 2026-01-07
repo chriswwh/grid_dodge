@@ -19,6 +19,9 @@ class GridDodgeEnv:
         self.cell_size = 100
         # Normalize coordinates so the grid is roughly 0.0 to 2.0
         self.scale = 100.0
+        # Match HTML's INIT_SPIKE_SPEED
+        self.init_spike_speed = 10
+        # Training will cover speeds from 5 to 50 by varying score
 
         self.reset()
 
@@ -58,9 +61,11 @@ class GridDodgeEnv:
             else:                # Left
                 sx, sy = -0.5, ty_center
 
-            # Speed calculation (Approximate the JS logic)
-            base_speed = 0.1 * (1 + (self.score / 30) * 0.2)
-            variance = 0.8 + (random.random() * 0.4)
+            # Speed calculation (Match the HTML game logic exactly)
+            # getGameSpeed() = INIT_SPIKE_SPEED * (1 + (score / 30) * 0.2)
+            # Scaled to normalized coordinates (divide by cell_size)
+            base_speed = (self.init_spike_speed / self.cell_size) * (1 + (self.score / 30) * 0.2)
+            variance = 0.8 + (random.random() * 0.4)  # 0.8 to 1.2
             speed = base_speed * variance
 
             # Velocity vector
