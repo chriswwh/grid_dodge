@@ -207,13 +207,14 @@ def train():
     replay_buffer = deque(maxlen=10000)
 
     epsilon = 1.0
-    epsilon_decay = 0.9995
+    epsilon_decay = 0.995
     epsilon_min = 0.05
     batch_size = 64
     gamma = 0.99
 
     episodes = 5000
     scores = []
+    max_speeds = []  # Track max speed achieved per episode
 
     print("Starting Training...")
 
@@ -272,11 +273,16 @@ def train():
         if epsilon > epsilon_min:
             epsilon *= epsilon_decay
 
+        # Record performance metrics
         scores.append(total_reward)
+        # Calculate max speed achieved (based on final score)
+        max_speed = env.init_spike_speed * (1 + (env.score / 30) * 0.2)
+        max_speeds.append(max_speed)
 
         if episode % 50 == 0:
             avg_score = np.mean(scores[-50:])
-            print(f"Episode {episode}, Avg Reward: {avg_score:.2f}, Epsilon: {epsilon:.2f}")
+            avg_speed = np.mean(max_speeds[-50:])
+            print(f"Episode {episode}, Avg Reward: {avg_score:.2f}, Avg Speed: {avg_speed:.1f}, Epsilon: {epsilon:.2f}")
 
     # Save the model
     torch.save(model.state_dict(), "grid_dodge_dqn.pth")
