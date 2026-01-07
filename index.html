@@ -144,6 +144,9 @@
         let GRID_OFFSET_X = 0;
         let GRID_OFFSET_Y = 0;
 
+        // Spike Configuration
+        const INIT_SPIKE_SPEED = 10;
+
         const player = { gridX: 0, gridY: 0, color: '#00ffff' };
         let hazards = [];
 
@@ -211,7 +214,7 @@
 
         // --- HELPER: CALCULATE CURRENT SPEED ---
         function getGameSpeed() {
-            return 5 * (1 + (score / 30) * 0.2);
+            return INIT_SPIKE_SPEED * (1 + (score / 30) * 0.2);
         }
 
         function updateSpeedDisplay() {
