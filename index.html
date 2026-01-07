@@ -76,7 +76,7 @@
         </div>
 
         <!-- AI Debug Panel (Hidden by default) -->
-        <div id="aiDebugPanel" class="hidden absolute top-0 left-0 p-4 m-2 bg-black/80 border border-purple-500/30 rounded text-[10px] leading-tight text-gray-300 debug-font w-48 z-10">
+        <div id="aiDebugPanel" class="hidden absolute top-0 left-0 p-6 m-3 bg-black/80 border border-purple-500/30 rounded text-[15px] leading-tight text-gray-300 debug-font w-72 z-10">
             <div class="text-purple-400 font-bold border-b border-purple-500/30 pb-1 mb-2">AI STATE & ACTION</div>
             <div id="aiStateContent">Waiting for inference...</div>
         </div>
@@ -154,7 +154,7 @@
         async function initBot() {
             try {
                 // IMPORTANT: Ensure 'grid_dodge.onnx' exists in the same directory or provide correct path
-                botSession = await ort.InferenceSession.create('./grid_dodge.onnx');
+                botSession = await ort.InferenceSession.create('./grid_dodge_dqn.onnx');
                 console.log("Bot Model Loaded");
                 botBtn.innerText = "WATCH BOT";
                 botBtn.disabled = false;
