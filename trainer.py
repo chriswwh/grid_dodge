@@ -212,7 +212,7 @@ def train():
     batch_size = 64
     gamma = 0.99
 
-    episodes = 200
+    episodes = 5000
     scores = []
 
     print("Starting Training...")
